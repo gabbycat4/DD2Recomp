@@ -1,0 +1,6 @@
+build/
+build-sdl/
+shots/
+generated/
+*.nes
+*.png

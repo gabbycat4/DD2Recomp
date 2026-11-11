@@ -1,0 +1,4 @@
+[game]
+output_prefix = "dd2"
+cycle_accurate = true
+cycle_capture_file = "/home/salemkitty/Projects/DD2Recomp/capture.txt"
