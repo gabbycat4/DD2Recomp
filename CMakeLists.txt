@@ -31,5 +31,9 @@ nesrecomp_add_cycle_game(dd2recomp
     CAPTURE_FILE "capture.txt"
     PLAYERS 2
     REGION NTSC
-    HOST_EXTRAS  "src/dd2_extras.c"
+    HOST_EXTRAS  "src/dd2_extras.c" "src/dd2_smooth.c"
     ${dd2_options})
+
+if(UNIX)
+    target_link_libraries(dd2recomp PRIVATE m)   # lround in dd2_smooth.c
+endif()
