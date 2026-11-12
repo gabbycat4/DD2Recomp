@@ -747,6 +747,109 @@ static bool option(void *ctx, const char *name, const char *value)
     return false;
 }
 
+/* ---- the in-game menu (recomp-ui runtime menu, when the build has it) ----
+ * Rows in two sections of their own. A change applies at once and is saved
+ * to config.ini [Game] like the keys above (it also replaces a value given
+ * on the command line for this run). */
+#ifdef CYC_WITH_RECOMP_UI
+#include "recomp_runtime_ui.h"
+
+static const char *const SMOOTH_CHOICES[] = { "Off", "Scenery only", "Scenery and characters" };
+static const char *const RATE_CHOICES[] = { "60 (off)", "120", "180", "240" };
+static const int RATE_VALUES[] = { 0, 120, 180, 240 };
+static const char *const CROP_CHOICES[] = { "Off", "Standard", "More", "Custom (config.ini)" };
+static const Crop CROP_PRESETS[] = { { 0, 0, 0, 0 }, { 8, 10, 8, 8 }, { 12, 12, 12, 12 } };
+
+static const RecompRuntimeUiItem s_menu[] = {
+    { "dd2.smooth", "Smooth scrolling", "Camera smoothing",
+      "Glides the scenery between the game's 2-pixel camera steps. 'Scenery and characters' moves the sprites "
+      "with the camera too (best with Character glide on).",
+      RECOMP_RUNTIME_UI_CHOICE, 0, 2, 1, SMOOTH_CHOICES, 3, NULL },
+    { "dd2.glide", "Smooth scrolling", "Character glide",
+      "Characters glide between the game's 30 Hz positions instead of hopping. Never ahead of the game, at most "
+      "1/30 s behind. Also removes sprite flicker.",
+      RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL },
+    { "dd2.rate", "Smooth scrolling", "Pictures per second",
+      "Extra pictures between the NES's 60 frames: the camera and characters move a fraction of a pixel in each. "
+      "Pick your monitor's refresh rate or lower (180 suits 240 Hz FreeSync).",
+      RECOMP_RUNTIME_UI_CHOICE, 0, 3, 1, RATE_CHOICES, 4, RATE_VALUES },
+    { "dd2.unlimit", "Picture", "No sprite flicker",
+      "Draws every sprite every frame instead of the NES's 8 per line, in one fixed order.",
+      RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL },
+    { "dd2.hudfix", "Picture", "Steady HUD line",
+      "Stops the black notch above the HUD from shaking.",
+      RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL },
+    { "dd2.crop", "Picture", "Edge crop",
+      "Hides the screen edges where the NES draws scrolling garbage. Standard: 8 pixels (10 at the bottom).",
+      RECOMP_RUNTIME_UI_CHOICE, 0, 3, 1, CROP_CHOICES, 4, NULL },
+};
+
+static bool key_is(const RecompRuntimeUiItem *it, const char *k) { return it->key && !strcmp(it->key, k); }
+
+static int crop_preset(void)
+{
+    for (int i = 0; i < 3; ++i) {
+        const Crop *c = &CROP_PRESETS[i];
+        if (s_crop.top == c->top && s_crop.bottom == c->bottom && s_crop.left == c->left && s_crop.right == c->right)
+            return i;
+    }
+    return 3;
+}
+
+static int menu_get(void *ctx, const RecompRuntimeUiItem *it, int *out)
+{
+    (void)ctx;
+    if (key_is(it, "dd2.smooth")) *out = s_smooth;
+    else if (key_is(it, "dd2.glide")) *out = s_charsmooth;
+    else if (key_is(it, "dd2.rate")) {
+        *out = 0;
+        for (int i = 0; i < 4; ++i) if (RATE_VALUES[i] == s_present_rate) *out = RATE_VALUES[i];
+    }
+    else if (key_is(it, "dd2.unlimit")) *out = s_unlimit || s_charsmooth;
+    else if (key_is(it, "dd2.hudfix")) *out = s_split;
+    else if (key_is(it, "dd2.crop")) *out = crop_preset();
+    else return 0;
+    return 1;
+}
+
+static int menu_set(void *ctx, const RecompRuntimeUiItem *it, int v)
+{
+    (void)ctx;
+    if (key_is(it, "dd2.smooth")) s_smooth = s_smooth_saved = clampi(v, 0, SMOOTH_MODES - 1);
+    else if (key_is(it, "dd2.glide")) s_charsmooth = s_charsmooth_saved = v != 0;
+    else if (key_is(it, "dd2.rate")) {
+        s_present_rate = s_rate_saved = clampi(v, 0, 1000);
+        s_extras.present_rate = (unsigned)s_present_rate;
+    }
+    else if (key_is(it, "dd2.unlimit")) s_unlimit = s_unlimit_saved = v != 0;
+    else if (key_is(it, "dd2.hudfix")) s_split = s_split_saved = v != 0;
+    else if (key_is(it, "dd2.crop")) {
+        if (v < 0 || v > 2) return 0;              /* Custom: edit config.ini */
+        s_crop = s_crop_saved = CROP_PRESETS[v];
+    }
+    else return 0;
+    return 1;
+}
+
+static int menu_enabled(void *ctx, const RecompRuntimeUiItem *it)
+{
+    (void)ctx;
+    if (key_is(it, "dd2.unlimit")) return !s_charsmooth;  /* glide always draws every sprite */
+    return 1;
+}
+
+static const RecompRuntimeUiCallbacks s_menu_callbacks = {
+    .get_value = menu_get, .set_value = menu_set, .is_enabled = menu_enabled,
+};
+#define DD2_MENU_ITEMS     s_menu
+#define DD2_MENU_COUNT     (sizeof(s_menu) / sizeof(s_menu[0]))
+#define DD2_MENU_CALLBACKS (&s_menu_callbacks)
+#else
+#define DD2_MENU_ITEMS     NULL
+#define DD2_MENU_COUNT     0
+#define DD2_MENU_CALLBACKS NULL
+#endif
+
 static CycHostExtras s_extras = {
     .present       = present,
     .load_setting  = load_setting,
@@ -758,6 +861,9 @@ static CycHostExtras s_extras = {
     .option        = option,
     .state_loaded  = state_loaded,
     .present_phase = present_phase,
+    .menu_items      = DD2_MENU_ITEMS,
+    .menu_item_count = DD2_MENU_COUNT,
+    .menu_callbacks  = DD2_MENU_CALLBACKS,
 };
 
 const CycHostExtras *cyc_host_extras(void) { return &s_extras; }
