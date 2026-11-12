@@ -6751,11 +6751,3 @@
 4k:1F:FD59 768
 4k:1F:FD5B 12
 4k:1F:FD5D 12
-#
-# 2 RAM addresses also started an instruction this run (not seedable).
-# 'opcodes' is how many distinct opcode bytes ever began an instruction
-# there; 1 means only operands change at that address.
-# address count opcodes
-# 07F0 13488 1
-# 07F3 13488 1
-# 2 addresses with one opcode, 0 with several
