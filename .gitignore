@@ -7,3 +7,4 @@ generated/
 frames/
 build-*/
 *.log
+capture.txt

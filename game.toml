@@ -1,4 +1,4 @@
 [game]
 output_prefix = "dd2"
+name = "Double Dragon II"
 cycle_accurate = true
-cycle_capture_file = "/home/salemkitty/Projects/DD2Recomp/capture.txt"
