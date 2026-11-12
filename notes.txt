@@ -1,0 +1,20 @@
+# DD2 Recomp notes
+
+## Setup
+- ROM: Double Dragon II USA Rev 1 (same file in Mesen and recomp)
+- Recomp: 100% native through Mission 1 opening route; windowed build plays with sound + PS4 pad
+
+## Timing measurements (Mesen, Mission 1)
+- Billy walks at 30 Hz: about 2 px per update, sub-pixel (occasional 3 then 1). Confirmed in 3 runs.
+- Walk pose changes every 10 frames (animation, not movement).
+- Punch animations update every 2nd frame. Hits freeze 3 frames (hit-stop).
+- Camera scroll: 30 Hz, 2 px per update, about 1 px/frame average, same as Billy.
+- Scroll has a 2,2,3,1 hitch every 8 frames, not seen in Billy sprite. Confirm in the recomp.
+- HUD split at scanline 185. Do not smooth below it.
+- Game sets playfield scroll during vblank, lines 247-257. Workload alternates every other frame.
+- Mesen script log keeps only the last ~500 lines.
+
+## Next session
+1. Proper DD2 project (CMakeLists.txt + HOST_EXTRAS code file)
+2. Recomp logs scroll per frame to confirm the 2,2,3,1 hitch
+3. Overscan crop as the first feature
