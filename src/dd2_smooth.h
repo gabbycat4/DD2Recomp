@@ -32,6 +32,8 @@ typedef struct {
     double dx[DD2_SMOOTH_WINDOW], dx_sum;
     double lag[DD2_SMOOTH_WINDOW], lag_sum;
     int    shift;                     /* last result */
+    double off;                       /* the same before rounding and the margin */
+    double vel;                       /* the smoothed camera's speed, px/frame */
     bool   clamped;                   /* last result hit the margin */
 } Dd2Smooth;
 
@@ -44,5 +46,6 @@ void dd2_smooth_set_margin(Dd2Smooth *sm, int margin, bool ease);
 void dd2_smooth_reset(Dd2Smooth *sm);
 /* One machine frame. visible: the playfield was drawn; dx: camera step since
  * the previous frame (px, signed). Returns the shift: draw native column x - shift
- * at screen column x. */
+ * at screen column x. A picture a fraction p of a frame later (between
+ * machine frames) uses off - vel * p. */
 int  dd2_smooth_frame(Dd2Smooth *sm, bool visible, int dx);

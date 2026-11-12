@@ -46,6 +46,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 enum {
     NES_W = 256,
@@ -68,9 +69,13 @@ static int  s_split_saved = 1, s_split = 1;
 enum { DEFAULT_MARGIN = DD2_SMOOTH_MARGIN };
 static int  s_ease_saved, s_ease;
 static int  s_unlimit_saved, s_unlimit;
+static int  s_rate_saved, s_present_rate;          /* pictures per second, 0: one per frame */
+static int  s_scale_saved = 4, s_scale = 4;        /* picture scale with PresentRate */
 static int  s_margin_saved = DEFAULT_MARGIN, s_margin = DEFAULT_MARGIN;
 
 /* ---- per-frame state (frame_end) ---- */
+static long      s_frame;                     /* machine frames since power on */
+static CycHostExtras s_extras;                /* defined at the end */
 static int       s_line = 100;                /* playfield line sampled */
 static Dd2Smooth s_smx, s_smy;
 static int       s_ox, s_oy;                  /* shifts for the last frame's picture */
@@ -79,7 +84,7 @@ static int       s_top = -1, s_hud = -1;      /* playfield rows [s_top, s_hud) *
 static int       s_hud_steady = -1;           /* latest HUD line over SPLIT_HISTORY */
 static int       s_hud_hist[SPLIT_HISTORY], s_hud_n, s_hud_head;
 
-static uint32_t s_full[NES_W * NES_H], s_bg[NES_W * NES_H], s_out[NES_W * NES_H];
+static uint32_t s_bg[NES_W * NES_H];
 static uint8_t  s_sprite[NES_W * NES_H];     /* 1 where a sprite pixel shows in the native picture */
 static uint8_t  s_extra_at[NES_W * NES_H];   /* dropped sprites: 1 front, 2 behind the background */
 static uint32_t s_extra[NES_W * NES_H];
@@ -230,109 +235,110 @@ static void sprite_layer_all(int y0, int y1)
     }
 }
 
-/* ---- picture ---- */
-static const uint32_t *compose(const uint32_t *native)
+/* ---- picture ----
+ * One renderer for every setting. Once per machine frame (prepare) it takes
+ * the background alone (the engine's background capture) and a sprite layer:
+ * every sprite in one fixed order with NoSpriteLimit, else the sprites the
+ * NES drew, read from the native picture. Each picture (present) then draws
+ * the playfield rows from those at the camera position for its moment,
+ * scaled by s_scale so the camera can move in fractions of a native pixel;
+ * other rows (the HUD) are the native picture. */
+static double s_phase;            /* fraction of a frame since the machine frame */
+static long   s_prepared = -1;    /* s_frame the layers were made for */
+static bool   s_have_layers;
+
+static void prepare(const uint32_t *native)
 {
-    if (s_top < 0 || s_hud - s_top < 8) return NULL;
-    int ox = s_smooth ? s_ox : 0, oy = s_smooth ? s_oy : 0;
-    bool shift = ox || oy;
-    bool fix = s_split && s_hud_steady >= s_hud;
-    int last = s_hud - 2;                        /* last whole playfield line */
-
-    /* No sprite limit: redraw the playfield from the background alone and
-     * every sprite in one fixed order, so nothing flickers or swaps. */
-    if (s_unlimit && cyc_render_background(s_bg)) {
-        bool move = s_smooth == SMOOTH_PLAYFIELD;
-        const uint8_t *opaque = cyc_frame_bg_opaque();
-        sprite_layer_all(s_top, last + 1);
-        memcpy(s_full, native, sizeof(s_full));
-        int y1 = fix ? s_hud_steady : s_hud;
-        for (int y = s_top; y < y1; ++y) {
-            int sy = clampi(y - oy, s_top, last);
-            int ey = move ? y - oy : y;
-            bool sprites = y <= last && ey >= s_top && ey <= last;
-            uint32_t *out = s_full + y * NES_W;
-            for (int x = 0; x < NES_W; ++x) {
-                int sx = clampi(x - ox, 0, NES_W - 1);
-                size_t b = (size_t)sy * NES_W + (size_t)sx;
-                out[x] = s_bg[b];
-                if (!sprites) continue;
-                int ex = move ? x - ox : x;
-                if (ex < 0 || ex >= NES_W) continue;
-                size_t e = (size_t)ey * NES_W + (size_t)ex;
-                if (s_layer_at[e] == 1 || (s_layer_at[e] == 2 && !opaque[b])) out[x] = s_layer[e];
-            }
+    s_prepared = s_frame;
+    s_have_layers = s_top >= 0 && s_hud - s_top >= 8 && cyc_render_background(s_bg);
+    if (!s_have_layers) return;
+    int last = s_hud - 2;
+    if (s_unlimit) { sprite_layer_all(s_top, last + 1); return; }
+    sprite_layers(s_top, last + 1, false);
+    for (int y = s_top; y <= last; ++y)
+        for (int x = 0; x < NES_W; ++x) {
+            size_t i = (size_t)y * NES_W + (size_t)x;
+            s_layer_at[i] = s_sprite[i];
+            s_layer[i] = native[i];
         }
-        return s_full;
-    }
-
-    bool bg = s_smooth == SMOOTH_BACKGROUND && shift && cyc_render_background(s_bg);
-    int extra = bg || s_unlimit ? sprite_layers(s_top, last + 1, s_unlimit) : 0;
-    if (!shift && !fix && !extra) return NULL;
-
-    memcpy(s_full, native, sizeof(s_full));
-    if (shift || fix) {
-        int y0 = shift ? s_top : s_hud - 1;
-        int y1 = fix ? s_hud_steady : s_hud;     /* exclusive */
-        for (int y = y0; y < y1; ++y) {
-            int sy = clampi(y - oy, s_top, last);
-            const uint32_t *src = (bg ? s_bg : native) + sy * NES_W;
-            const uint32_t *n = native + y * NES_W;
-            const uint8_t *cov = s_sprite + y * NES_W;
-            uint32_t *out = s_full + y * NES_W;
-            bool sprites_here = bg && y <= last;     /* keep sprites where the game drew them */
-            for (int x = 0; x < NES_W; ++x) {
-                if (sprites_here && cov[x]) { out[x] = n[x]; continue; }
-                out[x] = src[clampi(x - ox, 0, NES_W - 1)];
-            }
-        }
-    }
-
-    /* Sprites the game's flicker dropped this frame, under the drawn ones,
-     * where the sprite layer is (moved with the playfield in mode 2). */
-    if (extra) {
-        const uint8_t *opaque = cyc_frame_bg_opaque();
-        bool move = s_smooth == SMOOTH_PLAYFIELD;
-        for (int y = s_top; y <= last; ++y) {
-            int ey = move ? y - oy : y;
-            if (ey < s_top || ey > last) continue;
-            int by = clampi(y - oy, s_top, last);
-            uint32_t *out = s_full + y * NES_W;
-            for (int x = 0; x < NES_W; ++x) {
-                int exx = move ? x - ox : x;
-                if (exx < 0 || exx >= NES_W) continue;
-                size_t e = (size_t)ey * NES_W + (size_t)exx;
-                if (!s_extra_at[e] || s_sprite[e]) continue;
-                if (s_extra_at[e] == 2 && opaque[by * NES_W + clampi(x - ox, 0, NES_W - 1)]) continue;
-                out[x] = s_extra[e];
-            }
-        }
-    }
-    return s_full;
 }
+
+static int floordiv(int a, int k) { return a >= 0 ? a / k : -((-a + k - 1) / k); }
+
+enum { SCALE_MAX = 6 };
+static uint32_t s_big[NES_W * SCALE_MAX * NES_H * SCALE_MAX];
+static int s_col_native[NES_W * SCALE_MAX], s_col_bg[NES_W * SCALE_MAX], s_col_moved[NES_W * SCALE_MAX];
 
 static const uint32_t *present(void *ctx, int *width, int *height)
 {
     (void)ctx;
     int w, h;
-    const uint32_t *src = cyc_render_present(&w, &h);
-    if (!src || w != NES_W || h != NES_H) return NULL;              /* a wider/HD picture: leave it */
+    const uint32_t *native = cyc_render_present(&w, &h);
+    if (!native || w != NES_W || h != NES_H) return NULL;              /* a wider/HD picture: leave it */
+    if (s_prepared != s_frame) prepare(native);
+
+    int k = s_present_rate ? s_scale : 1;
+    bool smooth = s_smooth != SMOOTH_OFF;
     Crop c = s_crop;
-    if (s_smooth != SMOOTH_OFF) {
-        c.left += s_margin;
-        c.right += s_margin;
-        c.top += s_margin;
+    if (smooth) { c.left += s_margin; c.right += s_margin; c.top += s_margin; }
+    double fx = 0, fy = 0;
+    if (smooth) {
+        fx = s_smx.off - s_smx.vel * s_phase;
+        fy = s_smy.off - s_smy.vel * s_phase;
+        fx = fx < -s_margin ? -s_margin : fx > s_margin ? s_margin : fx;
+        fy = fy < -s_margin ? -s_margin : fy > s_margin ? s_margin : fy;
     }
-    const uint32_t *composed = compose(src);
-    if (!composed && !c.top && !c.bottom && !c.left && !c.right) return NULL;   /* host default */
-    if (composed) src = composed;
-    int ow = w - c.left - c.right, oh = h - c.top - c.bottom;
+    int kx = (int)lround(fx * k), ky = (int)lround(fy * k);
+    bool fix = s_split && s_hud_steady >= s_hud;
+    bool layers = s_have_layers && (kx || ky || fix || s_unlimit);
+    if (!layers && k == 1 && !c.top && !c.bottom && !c.left && !c.right) return NULL;   /* host default */
+
+    int ow = (NES_W - c.left - c.right) * k, oh = (NES_H - c.top - c.bottom) * k;
     if (ow <= 0 || oh <= 0) return NULL;
-    for (int y = 0; y < oh; ++y)
-        memcpy(&s_out[y * ow], &src[(y + c.top) * w + c.left], (size_t)ow * sizeof(uint32_t));
+    bool move = s_smooth == SMOOTH_PLAYFIELD;
+    int last = s_hud - 2, y1 = fix ? s_hud_steady : s_hud;
+    const uint8_t *opaque = cyc_frame_bg_opaque();
+    for (int x = 0; x < ow; ++x) {
+        int gx = c.left * k + x;
+        s_col_native[x] = gx / k;
+        s_col_moved[x] = floordiv(gx - kx, k);
+        s_col_bg[x] = clampi(s_col_moved[x], 0, NES_W - 1);
+    }
+    for (int y = 0; y < oh; ++y) {
+        int gy = c.top * k + y, yn = gy / k;
+        uint32_t *out = s_big + (size_t)y * (size_t)ow;
+        if (!layers || yn < s_top || yn >= y1) {
+            const uint32_t *row = native + yn * NES_W;
+            for (int x = 0; x < ow; ++x) out[x] = row[s_col_native[x]];
+            continue;
+        }
+        int moved = floordiv(gy - ky, k);
+        int by = clampi(moved, s_top, last);
+        const uint32_t *bg = s_bg + by * NES_W;
+        const uint8_t *op = opaque + by * NES_W;
+        int sy = move ? moved : yn;
+        bool sprites = yn <= last && sy >= s_top && sy <= last;
+        const uint8_t *at = s_layer_at + (sprites ? sy : 0) * NES_W;
+        const uint32_t *sc = s_layer + (sprites ? sy : 0) * NES_W;
+        for (int x = 0; x < ow; ++x) {
+            int bx = s_col_bg[x];
+            uint32_t px = bg[bx];
+            if (sprites) {
+                int sx = move ? s_col_moved[x] : s_col_native[x];
+                if (sx >= 0 && sx < NES_W && (at[sx] == 1 || (at[sx] == 2 && !op[bx]))) px = sc[sx];
+            }
+            out[x] = px;
+        }
+    }
     *width = ow;
     *height = oh;
-    return s_out;
+    return s_big;
+}
+
+static void present_phase(void *ctx, double phase)
+{
+    (void)ctx;
+    s_phase = phase;
 }
 
 /* ---- settings ---- */
@@ -357,6 +363,8 @@ static void load_setting(void *ctx, const char *key, const char *value)
     else if (!strcmp(key, "OverscanRight"))  s_crop_saved.right = clampi(v, 0, CROP_MAX);
     else if (!strcmp(key, "SmoothCamera"))   s_smooth = s_smooth_saved = clampi(v, 0, SMOOTH_MODES - 1);
     else if (!strcmp(key, "HudSplitFix"))    s_split = s_split_saved = v != 0;
+    else if (!strcmp(key, "PresentRate"))    s_present_rate = s_rate_saved = clampi(v, 0, 1000);
+    else if (!strcmp(key, "PresentScale"))   s_scale = s_scale_saved = clampi(v, 1, 6);
     else if (!strcmp(key, "NoSpriteLimit"))  s_unlimit = s_unlimit_saved = v != 0;
     else if (!strcmp(key, "SmoothEase"))     s_ease = s_ease_saved = v != 0;
     else if (!strcmp(key, "SmoothMargin"))   s_margin = s_margin_saved = clampi(v, 1, DD2_SMOOTH_MARGIN_MAX);
@@ -375,12 +383,13 @@ static void save_settings(void *ctx, FILE *f)
     fprintf(f, "SmoothMargin = %d\n", s_margin_saved);
     fprintf(f, "SmoothEase = %d\n", s_ease_saved);
     fprintf(f, "NoSpriteLimit = %d\n", s_unlimit_saved);
+    fprintf(f, "PresentRate = %d\n", s_rate_saved);
+    fprintf(f, "PresentScale = %d\n", s_scale_saved);
 }
 
 /* ---- per frame ---- */
 static FILE *s_log;
 static FILE *s_oam_log;   /* --oam-log: the frame's 64 OAM entries */
-static long  s_frame;
 
 static void restart(void)
 {
@@ -417,8 +426,10 @@ static void frame_end(void *ctx)
     long f = s_frame++;
 
     static bool capture_on;
+    s_phase = 0;
+    s_extras.present_rate = (unsigned)s_present_rate;
     oam_direction();
-    if ((s_smooth == SMOOTH_BACKGROUND || s_unlimit) && !capture_on) {
+    if (!capture_on) {
         cyc_render_capture_background(true);   /* whole from the next frame */
         capture_on = true;
     }
@@ -478,6 +489,8 @@ static const CycHostOption s_options[] = {
     { "--hud-split-fix", true, "0|1: steady the HUD split line for this run" },
     { "--smooth-margin", true, "N: smoothing margin in px, 1-12 (default 3; crops this much more)" },
     { "--smooth-ease",   true, "0|1: ease the camera's speed in and out (default 0)" },
+    { "--present-rate",  true, "N: pictures per second, e.g. 120 or 240 (0: one per machine frame)" },
+    { "--present-scale", true, "K: picture scale 1-6 with --present-rate (default 4)" },
     { "--no-sprite-limit", true, "0|1: also draw the sprites the 8-per-line limit drops (no flicker)" },
 };
 
@@ -506,6 +519,16 @@ static bool option(void *ctx, const char *name, const char *value)
         return true;
     }
     if (!strcmp(name, "--overscan")) return parse_crop(value, &s_crop);
+    if (!strcmp(name, "--present-rate") || !strcmp(name, "--present-scale")) {
+        char *end;
+        long v = strtol(value, &end, 10);
+        bool rate = name[10] == 'r';
+        if (*end || v < (rate ? 0 : 1) || v > (rate ? 1000 : 6)) return false;
+        if (rate) s_present_rate = (int)v;
+        else s_scale = (int)v;
+        s_extras.present_rate = (unsigned)s_present_rate;
+        return true;
+    }
     if (!strcmp(name, "--smooth-margin")) {
         char *end;
         long v = strtol(value, &end, 10);
@@ -530,7 +553,7 @@ static bool option(void *ctx, const char *name, const char *value)
     return false;
 }
 
-static const CycHostExtras s_extras = {
+static CycHostExtras s_extras = {
     .present       = present,
     .load_setting  = load_setting,
     .save_settings = save_settings,
@@ -540,6 +563,7 @@ static const CycHostExtras s_extras = {
     .option_count  = sizeof(s_options) / sizeof(s_options[0]),
     .option        = option,
     .state_loaded  = state_loaded,
+    .present_phase = present_phase,
 };
 
 const CycHostExtras *cyc_host_extras(void) { return &s_extras; }

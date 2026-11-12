@@ -96,5 +96,17 @@ int dd2_smooth_frame(Dd2Smooth *sm, bool visible, int dx)
     if (shift > sm->margin) shift = sm->margin;
     if (shift < -sm->margin) shift = -sm->margin;
     sm->shift = shift;
+    sm->off = off;
+    /* Where the next frame will most likely put the smoothed camera: on at
+     * this speed; once the camera has been still for longer than any gap in
+     * the game's rhythm (2 frames), never past the real camera, which has
+     * stopped. In-between pictures move toward it, so a stop never makes
+     * them run ahead and pull back, while a gap mid-rhythm keeps them going. */
+    double next = sm->s + sm->vd;
+    if (sm->idle < 3) { /* still travelling */ }
+    else if (sm->vd > 0.01 && next > sm->cam) next = sm->cam;
+    else if (sm->vd < -0.01 && next < sm->cam) next = sm->cam;
+    else if (fabs(sm->vd) <= 0.01) { double d = sm->cam - sm->s; next = sm->s + (d > 1 ? 1 : d < -1 ? -1 : d); }
+    sm->vel = next - sm->s;
     return shift;
 }
