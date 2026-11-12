@@ -18,3 +18,11 @@
 1. Proper DD2 project (CMakeLists.txt + HOST_EXTRAS code file)
 2. Recomp logs scroll per frame to confirm the 2,2,3,1 hitch
 3. Overscan crop as the first feature
+
+## Recomp scroll log results (play.log, 2026-11-12)
+- 2,2,3,1 hitch CONFIRMED in the recomp, matches Mesen. It is the frames BETWEEN updates; every update while walking is 2 px.
+  Walk: 2 px every 2,2,3,1 frames = 8 px / 8 frames = 1 px/frame.
+- Running: 3 px steps, gaps 3,1,2 = 9 px / 6 frames = 1.5 px/frame.
+- Frame 960: one +8 px step (between running and walking).
+- Playfield X wraps 255 -> 0 in one nametable (NT X bit never set): measure steps mod 256.
+- Camera locked during enemy waves (route.txt never clears the first wave, so it never scrolls).

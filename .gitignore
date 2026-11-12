@@ -5,3 +5,5 @@ generated/
 *.nes
 *.png
 frames/
+build-*/
+*.log
