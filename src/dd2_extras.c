@@ -11,10 +11,10 @@
  *                 tools/scroll_pattern.py and tools/smooth_sim.c read it.
  *
  *   Overscan crop config.ini [Game] OverscanTop/Bottom/Left/Right (pixels,
- *                 default 0), or --overscan T,B,L,R for one run.
+ *                 default 8, 10, 8, 8), or --overscan T,B,L,R for one run.
  *
  *   Smooth camera config.ini [Game] SmoothCamera, or --smooth N for one run:
- *                 0 off (default), 1 background (sprites stay where the game
+ *                 0 off, 1 background (default) (sprites stay where the game
  *                 drew them), 2 playfield (background and sprites together).
  *                 Shifts the playfield by up to SmoothMargin px (default
  *                 3, --smooth-margin N) in X and Y so the camera moves
@@ -24,7 +24,7 @@
  *                 the margin so no edge the game did not draw is shown; the
  *                 HUD is never shifted.
  *
- *   No sprite limit config.ini [Game] NoSpriteLimit (default 0), or
+ *   No sprite limit config.ini [Game] NoSpriteLimit (default 1), or
  *                 --no-sprite-limit 0|1: the NES draws at most 8 sprites per
  *                 line and DD2 takes turns when more share one (flicker).
  *                 DD2 also writes its sprite list backwards every other
@@ -32,7 +32,7 @@
  *                 playfield from the background and all sprites in the
  *                 same order on every frame (background capture).
  *
- *   Character glide config.ini [Game] CharSmooth (default 0), --char-smooth
+ *   Character glide config.ini [Game] CharSmooth (default 1), --char-smooth
  *                 0|1: characters glide between the game's 30 Hz positions,
  *                 drawn up to one update behind, never ahead; they move with
  *                 the smoothed camera. Draws every sprite (no 8-per-line
@@ -69,12 +69,16 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
 typedef struct { int top, bottom, left, right; } Crop;
 enum { SMOOTH_OFF, SMOOTH_BACKGROUND, SMOOTH_PLAYFIELD, SMOOTH_MODES };
 
-static Crop s_crop_saved, s_crop;            /* config.ini / in effect */
-static int  s_smooth_saved, s_smooth;
+/* Defaults (a fresh config.ini): the recommended setup in README.md, except
+ * the picture rate, which stays at one per machine frame because not every
+ * monitor refreshes faster than 60 Hz. */
+#define DD2_DEFAULT_CROP { 8, 10, 8, 8 }
+static Crop s_crop_saved = DD2_DEFAULT_CROP, s_crop = DD2_DEFAULT_CROP;   /* config.ini / in effect */
+static int  s_smooth_saved = 1, s_smooth = 1;        /* SMOOTH_BACKGROUND: scenery only */
 static int  s_split_saved = 1, s_split = 1;
 enum { DEFAULT_MARGIN = DD2_SMOOTH_MARGIN };
 static int  s_ease_saved, s_ease;
-static int  s_unlimit_saved, s_unlimit;
+static int  s_unlimit_saved = 1, s_unlimit = 1;
 static int  s_rate_saved, s_present_rate;          /* pictures per second, 0: one per frame */
 static int  s_scale_saved = 4, s_scale = 4;        /* picture scale: the window gets the picture
                                                     * this many times the NES size, always, so
@@ -266,7 +270,7 @@ static CsChar   s_cc[64], s_cc_prev[64];
 static int      s_cs_n, s_cs_prev_n, s_cc_n;
 static long     s_wx, s_wy, s_prev_wx, s_prev_wy;   /* the real camera, unwrapped */
 static bool     s_cs_valid, s_cs_prev_valid;
-static int      s_charsmooth_saved, s_charsmooth;
+static int      s_charsmooth_saved = 1, s_charsmooth = 1;
 
 static double cs_left(const CsChar *c, double t)    /* fraction of the glide still to go */
 {

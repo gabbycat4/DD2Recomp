@@ -29,7 +29,11 @@ checks it is the right one before it runs.
 
 ## Recommended settings
 
-In game, press **Escape** (or the right shoulder button) for the menu:
+The game starts with these already on, except two you set yourself:
+**Pictures per second** starts at 60, because only high-refresh monitors
+benefit from more, and the game opens in a window (press **F11** for
+fullscreen). In game, press **Escape** (or the right shoulder button) for the
+menu:
 
 | Menu | Setting | Recommended |
 |---|---|---|
