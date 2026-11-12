@@ -76,7 +76,11 @@ enum { DEFAULT_MARGIN = DD2_SMOOTH_MARGIN };
 static int  s_ease_saved, s_ease;
 static int  s_unlimit_saved, s_unlimit;
 static int  s_rate_saved, s_present_rate;          /* pictures per second, 0: one per frame */
-static int  s_scale_saved = 4, s_scale = 4;        /* picture scale with PresentRate */
+static int  s_scale_saved = 4, s_scale = 4;        /* picture scale: the window gets the picture
+                                                    * this many times the NES size, always, so
+                                                    * changing PresentRate in the menu never
+                                                    * changes the picture's size (the window does
+                                                    * not take a 4x jump while the menu is open) */
 static int  s_margin_saved = DEFAULT_MARGIN, s_margin = DEFAULT_MARGIN;
 
 /* ---- per-frame state (frame_end) ---- */
@@ -456,7 +460,7 @@ static const uint32_t *present(void *ctx, int *width, int *height)
     if (!native || w != NES_W || h != NES_H) return NULL;              /* a wider/HD picture: leave it */
     if (s_prepared != s_frame) prepare(native);
 
-    int k = s_present_rate ? s_scale : 1;
+    int k = s_scale;
     bool smooth = s_smooth != SMOOTH_OFF;
     Crop c = s_crop;
     if (smooth) { c.left += s_margin; c.right += s_margin; c.top += s_margin; }
@@ -678,7 +682,7 @@ static const CycHostOption s_options[] = {
     { "--smooth-margin", true, "N: smoothing margin in px, 1-12 (default 3; crops this much more)" },
     { "--smooth-ease",   true, "0|1: ease the camera's speed in and out (default 0)" },
     { "--present-rate",  true, "N: pictures per second, e.g. 120 or 240 (0: one per machine frame)" },
-    { "--present-scale", true, "K: picture scale 1-6 with --present-rate (default 4)" },
+    { "--present-scale", true, "K: picture scale 1-6 (default 4; 1 = the NES size, whole-pixel motion only)" },
     { "--char-smooth",   true, "0|1: glide characters between the game's 30 Hz positions" },
     { "--no-sprite-limit", true, "0|1: also draw the sprites the 8-per-line limit drops (no flicker)" },
 };
