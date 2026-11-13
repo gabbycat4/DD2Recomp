@@ -8,3 +8,4 @@ frames/
 build-*/
 *.log
 capture.txt
+!packaging/**/*.png
