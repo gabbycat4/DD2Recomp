@@ -35,16 +35,19 @@ jobs:
 
       - name: Restore the ROM from secrets
         shell: bash
-        env:
-          DD2_ROM_0: ${{ secrets.DD2_ROM_0 }}
-          DD2_ROM_1: ${{ secrets.DD2_ROM_1 }}
-          DD2_ROM_2: ${{ secrets.DD2_ROM_2 }}
-          DD2_ROM_3: ${{ secrets.DD2_ROM_3 }}
-          DD2_ROM_4: ${{ secrets.DD2_ROM_4 }}
-          DD2_ROM_5: ${{ secrets.DD2_ROM_5 }}
-          DD2_ROM_6: ${{ secrets.DD2_ROM_6 }}
-          DD2_ROM_7: ${{ secrets.DD2_ROM_7 }}
-        run: python tools/release/restore_rom.py dd2.nes
+        run: |
+          cat > rom.b64 <<'DD2_ROM_EOF'
+          ${{ secrets.DD2_ROM_0 }}
+          ${{ secrets.DD2_ROM_1 }}
+          ${{ secrets.DD2_ROM_2 }}
+          ${{ secrets.DD2_ROM_3 }}
+          ${{ secrets.DD2_ROM_4 }}
+          ${{ secrets.DD2_ROM_5 }}
+          ${{ secrets.DD2_ROM_6 }}
+          ${{ secrets.DD2_ROM_7 }}
+          DD2_ROM_EOF
+          python tools/release/restore_rom.py dd2.nes rom.b64
+          rm -f rom.b64
 
       - name: Configure
         shell: bash
@@ -111,16 +114,20 @@ jobs:
           cmake --install "$RUNNER_TEMP/SDL/build"
 
       - name: Restore the ROM from secrets
-        env:
-          DD2_ROM_0: ${{ secrets.DD2_ROM_0 }}
-          DD2_ROM_1: ${{ secrets.DD2_ROM_1 }}
-          DD2_ROM_2: ${{ secrets.DD2_ROM_2 }}
-          DD2_ROM_3: ${{ secrets.DD2_ROM_3 }}
-          DD2_ROM_4: ${{ secrets.DD2_ROM_4 }}
-          DD2_ROM_5: ${{ secrets.DD2_ROM_5 }}
-          DD2_ROM_6: ${{ secrets.DD2_ROM_6 }}
-          DD2_ROM_7: ${{ secrets.DD2_ROM_7 }}
-        run: python tools/release/restore_rom.py dd2.nes
+        shell: bash
+        run: |
+          cat > rom.b64 <<'DD2_ROM_EOF'
+          ${{ secrets.DD2_ROM_0 }}
+          ${{ secrets.DD2_ROM_1 }}
+          ${{ secrets.DD2_ROM_2 }}
+          ${{ secrets.DD2_ROM_3 }}
+          ${{ secrets.DD2_ROM_4 }}
+          ${{ secrets.DD2_ROM_5 }}
+          ${{ secrets.DD2_ROM_6 }}
+          ${{ secrets.DD2_ROM_7 }}
+          DD2_ROM_EOF
+          python tools/release/restore_rom.py dd2.nes rom.b64
+          rm -f rom.b64
 
       # FreeType/HarfBuzz are left out (emoji stay outline glyphs) so the
       # program needs nothing beyond SDL2, OpenGL and the C/C++ runtimes.
