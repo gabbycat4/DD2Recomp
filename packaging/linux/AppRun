@@ -1,0 +1,23 @@
+#!/bin/sh
+# DD2Recomp AppImage entry point.
+#
+# The game keeps config.ini, rom.cfg (your ROM's location) and saves beside its
+# program, and an AppImage is read-only. So the program is copied once per
+# version to ~/.local/share/DD2Recomp and run from there; your settings and
+# saves in that folder are kept across updates.
+HERE="$(dirname "$(readlink -f "$0")")"
+DATA="${DD2RECOMP_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/DD2Recomp}"
+VERSION="$(cat "$HERE/VERSION")"
+
+if [ "$(cat "$DATA/VERSION" 2>/dev/null)" != "$VERSION" ] || [ ! -x "$DATA/bin/dd2recomp" ]; then
+    mkdir -p "$DATA/bin" || exit 1
+    rm -rf "$DATA/bin/assets" "$DATA/lib"
+    cp -R "$HERE/usr/lib" "$DATA/lib" &&
+    cp -R "$HERE/usr/bin/assets" "$DATA/bin/assets" &&
+    cp -f "$HERE/usr/bin/dd2recomp" "$DATA/bin/dd2recomp.new" &&
+    mv -f "$DATA/bin/dd2recomp.new" "$DATA/bin/dd2recomp" &&
+    cp -f "$HERE/VERSION" "$DATA/VERSION" || exit 1
+fi
+
+cd "$DATA/bin" || exit 1
+exec "$DATA/bin/dd2recomp" "$@"

@@ -27,6 +27,18 @@ on a NES. Each feature can be switched off in the menu.
 supply a dump of *Double Dragon II - The Revenge (USA) (Rev 1)*; the program
 checks it is the right one before it runs.
 
+## Download
+
+Get the latest version from the
+[Releases page](https://github.com/gabbycat4/DD2Recomp/releases/latest):
+
+- **Windows:** `DD2Recomp-Windows-x64.zip`. Extract it, double-click
+  `dd2recomp.exe`.
+- **Linux:** `DD2Recomp-x86_64.AppImage`. Mark it executable (right-click,
+  Properties, Permissions, or `chmod +x`), then double-click it.
+
+The first time, the game asks for your ROM and checks it. No building needed.
+
 ## Recommended settings
 
 The game starts with these already on, except two you set yourself:
@@ -51,7 +63,7 @@ Settings are saved in `config.ini` beside the program.
 
 ## Building
 
-You need Git, CMake 3.20+, a C/C++ compiler, Python 3.11+ and SDL2.
+Only needed if you want to change the code. You need Git, CMake 3.20+, a C/C++ compiler, Python 3.11+ and SDL2.
 
 **Linux** (Arch/CachyOS: `sudo pacman -S git cmake ninja sdl2 python`;
 Debian/Ubuntu: `sudo apt install git cmake ninja-build build-essential libsdl2-dev python3`):

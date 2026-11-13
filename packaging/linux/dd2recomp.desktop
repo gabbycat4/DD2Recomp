@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Double Dragon II Recompiled
+Comment=Native PC port of Double Dragon II (NES); needs your own ROM
+Exec=dd2recomp
+Icon=dd2recomp
+Categories=Game;ActionGame;
+Terminal=false
