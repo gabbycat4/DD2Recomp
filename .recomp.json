@@ -1,5 +1,5 @@
 {
-  "$schema": "https://recomp.fyi/schema/v1.json"
+  "$schema": "https://recomp.fyi/schema/v1.json",
   "game": "Double Dragon II: The Revenge",
   "system": "NES",
   "type": "recomp",
