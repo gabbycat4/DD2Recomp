@@ -43,6 +43,18 @@
  *                 playfield line, at a slightly different dot each frame, so
  *                 the right end of that line flickers black. The fix draws
  *                 that line from the playfield line above it.
+ *
+ *   Second core   config.ini [Game] EmuThread (default 1), --emu-thread 0|1:
+ *                 with PresentRate above 60, the next NES frame runs on a
+ *                 second core while the in-between pictures are shown (the
+ *                 engine's present_from_snapshot). DD2 takes 6-10 ms to
+ *                 emulate a frame (pacing.log, Nov 13: 9.4 ms median, an
+ *                 in-between picture late on 86% of frames at 120); at 240
+ *                 a picture gets 4.17 ms. Everything a picture needs is
+ *                 copied once per frame in frame_end (prepare), while the
+ *                 machine is idle: the native picture, background and its
+ *                 opacity, sprite layers, CHR, per-line sprite size/table
+ *                 and the sprite colours. present() reads nothing live.
  */
 #include "cyc_host_extras.h"
 #include "cyc_core.h"
@@ -86,6 +98,7 @@ static int  s_scale_saved = 4, s_scale = 4;        /* picture scale: the window 
                                                     * changes the picture's size (the window does
                                                     * not take a 4x jump while the menu is open) */
 static int  s_margin_saved = DEFAULT_MARGIN, s_margin = DEFAULT_MARGIN;
+static int  s_thread_saved = 1, s_thread = 1;      /* EmuThread: second core above 60 pictures */
 
 /* ---- per-frame state (frame_end) ---- */
 static long      s_frame;                     /* machine frames since power on */
@@ -104,6 +117,16 @@ static uint8_t  s_extra_at[NES_W * NES_H];   /* dropped sprites: 1 front, 2 behi
 static uint32_t s_extra[NES_W * NES_H];
 static uint8_t  s_layer_at[NES_W * NES_H];   /* all sprites: 1 front, 2 behind the background */
 static uint32_t s_layer[NES_W * NES_H];
+
+/* Copied once per machine frame (prepare, from frame_end): all an in-between
+ * picture reads, so it may be drawn while the next frame is being emulated. */
+static uint32_t s_native[NES_W * NES_H];     /* the NES picture */
+static bool     s_native_ok;
+static uint8_t  s_bgop[NES_W * NES_H];       /* background opacity (cyc_frame_bg_opaque) */
+static uint8_t  s_snap_chr[0x2000];
+static uint8_t  s_snap_tall[NES_H];
+static uint16_t s_snap_table[NES_H];
+static uint32_t s_snap_col[16];               /* sprite palette as ARGB */
 
 /* Line y continues the playfield drawn on line y - 1: same X, next Y. */
 static bool continues(int y)
@@ -381,8 +404,8 @@ static void char_draw(uint32_t *out, const uint8_t *op, int ow, int oh, int k, C
                       double fx, double fy, int ytop, int ylast)
 {
     memset(s_taken, 0, (size_t)ow * (size_t)oh);
-    bool tall = cyc_render_line_sprite16(ytop);
-    uint16_t table = cyc_render_line_sprite_table(ytop);
+    bool tall = s_snap_tall[ytop];
+    uint16_t table = s_snap_table[ytop];
     int rows = tall ? 16 : 8;
     int yclip0 = ytop * k - c.top * k, yclip1 = (ylast + 1) * k - c.top * k;   /* output rows */
     if (yclip0 < 0) yclip0 = 0;
@@ -398,14 +421,14 @@ static void char_draw(uint32_t *out, const uint8_t *op, int ow, int oh, int k, C
             int row = (attr & 0x80) ? rows - 1 - r : r;
             uint16_t pattern = tall ? (uint16_t)(((sp->tile & 1) ? 0x1000 : 0) + (sp->tile & 0xFE) * 16 + (row >= 8 ? 16 : 0))
                                     : (uint16_t)(table + sp->tile * 16);
-            uint8_t lo = cyc_render_chr((uint16_t)(pattern + (row & 7)));
-            uint8_t hi = cyc_render_chr((uint16_t)(pattern + (row & 7) + 8));
+            uint8_t lo = s_snap_chr[(pattern + (row & 7)) & 0x1FFF];
+            uint8_t hi = s_snap_chr[(pattern + (row & 7) + 8) & 0x1FFF];
             if (!(lo | hi)) continue;
             for (int cc = 0; cc < 8; ++cc) {
                 int bit = (attr & 0x40) ? cc : 7 - cc;
                 int v = ((lo >> bit) & 1) | (((hi >> bit) & 1) << 1);
                 if (!v) continue;
-                uint32_t colour = cyc_render_color(16 + (int)(attr & 3) * 4 + v);
+                uint32_t colour = s_snap_col[(int)(attr & 3) * 4 + v];
                 for (int yy = y0 + r * k; yy < y0 + (r + 1) * k; ++yy) {
                     if (yy < yclip0 || yy >= yclip1) continue;
                     for (int xx = x0 + cc * k; xx < x0 + (cc + 1) * k; ++xx) {
@@ -433,9 +456,23 @@ static void char_draw(uint32_t *out, const uint8_t *op, int ow, int oh, int k, C
 static long   s_prepared = -1;    /* s_frame the layers were made for */
 static bool   s_have_layers;
 
-static void prepare(const uint32_t *native)
+static void prepare(void)
 {
     s_prepared = s_frame;
+    s_have_layers = false;
+    int w = 0, h = 0;
+    const uint32_t *native = cyc_render_present(&w, &h);
+    s_native_ok = native && w == NES_W && h == NES_H;
+    if (!s_native_ok) return;                                    /* a wider/HD picture: leave it */
+    memcpy(s_native, native, sizeof(s_native));
+    native = s_native;
+    memcpy(s_bgop, cyc_frame_bg_opaque(), sizeof(s_bgop));
+    for (int a = 0; a < 0x2000; ++a) s_snap_chr[a] = cyc_render_chr((uint16_t)a);
+    for (int y = 0; y < NES_H; ++y) {
+        s_snap_tall[y] = cyc_render_line_sprite16(y);
+        s_snap_table[y] = cyc_render_line_sprite_table(y);
+    }
+    for (int i = 0; i < 16; ++i) s_snap_col[i] = cyc_render_color(16 + i);
     s_have_layers = s_top >= 0 && s_hud - s_top >= 8 && cyc_render_background(s_bg);
     if (!s_have_layers) return;
     int last = s_hud - 2;
@@ -459,10 +496,21 @@ static int s_col_native[NES_W * SCALE_MAX], s_col_bg[NES_W * SCALE_MAX], s_col_m
 static const uint32_t *present(void *ctx, int *width, int *height)
 {
     (void)ctx;
-    int w, h;
-    const uint32_t *native = cyc_render_present(&w, &h);
-    if (!native || w != NES_W || h != NES_H) return NULL;              /* a wider/HD picture: leave it */
-    if (s_prepared != s_frame) prepare(native);
+    static int last_w, last_h;
+    static bool have_last;
+    if (s_prepared != s_frame) {
+        /* frame_end prepares every frame; this is only a picture before the
+         * first frame. An in-between picture (phase > 0) must not read the
+         * machine (the next frame may be running): repeat the last one. */
+        if (s_phase > 0) {
+            if (!have_last) return NULL;
+            *width = last_w; *height = last_h;
+            return s_big;
+        }
+        prepare();
+    }
+    if (!s_native_ok) return NULL;
+    const uint32_t *native = s_native;
 
     int k = s_scale;
     bool smooth = s_smooth != SMOOTH_OFF;
@@ -479,13 +527,14 @@ static const uint32_t *present(void *ctx, int *width, int *height)
     bool fix = s_split && s_hud_steady >= s_hud;
     bool glide = s_charsmooth && s_cs_valid && s_have_layers;
     bool layers = s_have_layers && (kx || ky || fix || s_unlimit || glide);
-    if (!layers && k == 1 && !c.top && !c.bottom && !c.left && !c.right) return NULL;   /* host default */
+    if (!layers && k == 1 && !c.top && !c.bottom && !c.left && !c.right && !s_extras.present_from_snapshot)
+        return NULL;   /* host default (never while the next frame may be running) */
 
     int ow = (NES_W - c.left - c.right) * k, oh = (NES_H - c.top - c.bottom) * k;
     if (ow <= 0 || oh <= 0) return NULL;
     bool move = s_smooth == SMOOTH_PLAYFIELD;
     int last = s_hud - 2, y1 = fix ? s_hud_steady : s_hud;
-    const uint8_t *opaque = cyc_frame_bg_opaque();
+    const uint8_t *opaque = s_bgop;
     for (int x = 0; x < ow; ++x) {
         int gx = c.left * k + x;
         s_col_native[x] = gx / k;
@@ -523,8 +572,9 @@ static const uint32_t *present(void *ctx, int *width, int *height)
         }
     }
     if (glide) char_draw(s_big, s_big_op, ow, oh, k, c, fx, fy, s_top, last);
-    *width = ow;
-    *height = oh;
+    *width = last_w = ow;
+    *height = last_h = oh;
+    have_last = true;
     return s_big;
 }
 
@@ -562,6 +612,7 @@ static void load_setting(void *ctx, const char *key, const char *value)
     else if (!strcmp(key, "NoSpriteLimit"))  s_unlimit = s_unlimit_saved = v != 0;
     else if (!strcmp(key, "SmoothEase"))     s_ease = s_ease_saved = v != 0;
     else if (!strcmp(key, "SmoothMargin"))   s_margin = s_margin_saved = clampi(v, 1, DD2_SMOOTH_MARGIN_MAX);
+    else if (!strcmp(key, "EmuThread"))      s_thread = s_thread_saved = v != 0;
     s_crop = s_crop_saved;
 }
 
@@ -580,6 +631,7 @@ static void save_settings(void *ctx, FILE *f)
     fprintf(f, "CharSmooth = %d\n", s_charsmooth_saved);
     fprintf(f, "PresentRate = %d\n", s_rate_saved);
     fprintf(f, "PresentScale = %d\n", s_scale_saved);
+    fprintf(f, "EmuThread = %d\n", s_thread_saved);
 }
 
 /* ---- per frame ---- */
@@ -645,6 +697,12 @@ static void frame_end(void *ctx)
     s_oy = dd2_smooth_frame(&s_smy, on, dy);
     char_frame(on, dx, dy);
 
+    /* Now, while the machine is idle: everything this frame's pictures need.
+     * The window reads present_from_snapshot before it starts the next
+     * frame, so the promise always matches what prepare() copied. */
+    prepare();
+    s_extras.present_from_snapshot = s_thread && s_present_rate > 60 && s_native_ok;
+
     if (s_oam_log) {
         const uint8_t *oam = cyc_render_oam();
         fprintf(s_oam_log, "%ld", f);
@@ -689,6 +747,7 @@ static const CycHostOption s_options[] = {
     { "--present-scale", true, "K: picture scale 1-6 (default 4; 1 = the NES size, whole-pixel motion only)" },
     { "--char-smooth",   true, "0|1: glide characters between the game's 30 Hz positions" },
     { "--no-sprite-limit", true, "0|1: also draw the sprites the 8-per-line limit drops (no flicker)" },
+    { "--emu-thread",    true, "0|1: emulate the next frame on a second core above 60 pictures (default 1)" },
 };
 
 static bool option(void *ctx, const char *name, const char *value)
@@ -731,6 +790,11 @@ static bool option(void *ctx, const char *name, const char *value)
         long v = strtol(value, &end, 10);
         if (*end || v < 1 || v > DD2_SMOOTH_MARGIN_MAX) return false;
         s_margin = (int)v;
+        return true;
+    }
+    if (!strcmp(name, "--emu-thread")) {
+        if (strcmp(value, "0") && strcmp(value, "1")) return false;
+        s_thread = value[0] == '1';
         return true;
     }
     if (!strcmp(name, "--char-smooth")) {
@@ -779,8 +843,13 @@ static const RecompRuntimeUiItem s_menu[] = {
       RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL },
     { "dd2.rate", "Smooth scrolling", "Pictures per second",
       "Extra pictures between the NES's 60 frames: the camera and characters move a fraction of a pixel in each. "
-      "Pick your monitor's refresh rate or lower (180 suits 240 Hz FreeSync).",
+      "Pick your monitor's refresh rate or lower. 240 on a 240 Hz FreeSync monitor (with Second core on); "
+      "at 240 the game runs at 59.94 frames a second so the pictures fit under the monitor's limit.",
       RECOMP_RUNTIME_UI_CHOICE, 0, 3, 1, RATE_CHOICES, 4, RATE_VALUES },
+    { "dd2.thread", "Smooth scrolling", "Second core",
+      "Runs the next NES frame on a second CPU core while the in-between pictures are shown, so they "
+      "are evenly spaced and none come late. Off: one core (pictures can only come after each frame).",
+      RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL },
     { "dd2.unlimit", "Picture", "No sprite flicker",
       "Draws every sprite every frame instead of the NES's 8 per line, in one fixed order.",
       RECOMP_RUNTIME_UI_BOOL, 0, 1, 1, NULL, 0, NULL },
@@ -813,6 +882,7 @@ static int menu_get(void *ctx, const RecompRuntimeUiItem *it, int *out)
         *out = 0;
         for (int i = 0; i < 4; ++i) if (RATE_VALUES[i] == s_present_rate) *out = RATE_VALUES[i];
     }
+    else if (key_is(it, "dd2.thread")) *out = s_thread;
     else if (key_is(it, "dd2.unlimit")) *out = s_unlimit || s_charsmooth;
     else if (key_is(it, "dd2.hudfix")) *out = s_split;
     else if (key_is(it, "dd2.crop")) *out = crop_preset();
@@ -829,6 +899,7 @@ static int menu_set(void *ctx, const RecompRuntimeUiItem *it, int v)
         s_present_rate = s_rate_saved = clampi(v, 0, 1000);
         s_extras.present_rate = (unsigned)s_present_rate;
     }
+    else if (key_is(it, "dd2.thread")) s_thread = s_thread_saved = v != 0;
     else if (key_is(it, "dd2.unlimit")) s_unlimit = s_unlimit_saved = v != 0;
     else if (key_is(it, "dd2.hudfix")) s_split = s_split_saved = v != 0;
     else if (key_is(it, "dd2.crop")) {
@@ -843,6 +914,7 @@ static int menu_enabled(void *ctx, const RecompRuntimeUiItem *it)
 {
     (void)ctx;
     if (key_is(it, "dd2.unlimit")) return !s_charsmooth;  /* glide always draws every sprite */
+    if (key_is(it, "dd2.thread")) return s_present_rate > 60;
     return 1;
 }
 
